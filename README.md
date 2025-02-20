@@ -2,7 +2,6 @@
 
 [![Actions Status](https://github.com/dalance/amber/workflows/Regression/badge.svg)](https://github.com/dalance/amber/actions)
 [![Crates.io](https://img.shields.io/crates/v/amber.svg)](https://crates.io/crates/amber)
-[![codecov](https://codecov.io/gh/dalance/amber/branch/master/graph/badge.svg)](https://codecov.io/gh/dalance/amber)
 
 **amber** is a code search and replace tool written by [Rust](https://www.rust-lang.org/).
 This tool is inspired by [ack](http://beyondgrep.com/),
@@ -28,7 +27,17 @@ You can decide to do replacing or not interactively.
 ### Arch Linux
 Install the `amber-search-git` package from AUR.
 
-```yaourt -S amber-search-git```
+```
+yay -S amber-search-git
+```
+
+### Cargo
+
+You can install with [cargo](https://crates.io/crates/amber).
+
+```
+cargo install amber
+```
 
 ### Manual
 Download from [release page](https://github.com/dalance/amber/releases/latest), and extract to the directory in PATH.
@@ -63,7 +72,23 @@ aaa bbb aaa bbb
 
 ## Configuration
 
-Default flags can be configured by `~/.ambs.toml` and `~/.ambr.toml`.
+### Configuration path
+
+You can change configuration by writing a configuration file.
+The locations of the configuration file is OS-specific:
+
+ * Linux: `~/.config/amber/ambs.toml`, `/etc/amber/ambs.toml`
+ * macOS: `~/Library/Preferences/com.github.dalance.amber/ambs.toml`, `/etc/amber/ambs.toml`
+ * Windows: `~/AppData/Roaming/dalance/amber/config/ambs.toml`
+
+For compatibility, if `~/.ambs.toml` exists, it will be preferred to
+the OS-specific locations.
+
+The above paths are examples for the configuration of `ambs` command.
+`ambr.toml` in the same directory is used for `ambr` command.
+
+### Configurable value
+
 Available entries and default values are below:
 
 ```toml
@@ -82,6 +107,7 @@ skip_vcs       = true
 skip_gitignore = true
 fixed_order    = true
 parent_ignore  = true
+line_by_match  = false
 ```
 
 You can choose some entries to override like below:

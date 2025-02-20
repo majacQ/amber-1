@@ -1,6 +1,6 @@
 [package]
 name = "amber"
-version = "0.5.10-pre"
+version = "0.6.0"
 authors = ["dalance@gmail.com"]
 repository = "https://github.com/dalance/amber"
 keywords = ["search", "replace"]
@@ -8,7 +8,7 @@ categories = ["command-line-utilities", "development-tools"]
 license = "MIT"
 readme = "README.md"
 description = "A code search and replace tool"
-edition = "2018"
+edition = "2021"
 
 [badges]
 travis-ci = { repository = "dalance/amber" }
@@ -28,28 +28,26 @@ sse = []
 statistics = []
 
 [dependencies]
-crossbeam         = "0.8"
-ctrlc             = "3"
-dirs              = "3"
-filetime          = "0.2"
-getch             = "0.2"
-glob              = "0.3"
-lazy_static       = "1"
-memmap            = "0.7"
-num_cpus          = "1"
-regex             = "1"
-rand              = "0.8"
-rlibc             = "1"
-rustc-serialize   = "0.3"
-scoped_threadpool = "0.1"
-serde             = "1"
-serde_derive      = "1"
-structopt         = "0.3"
-tempfile          = "3"
-term              = "0.7"
-time              = "0.2"
-toml              = "0.5"
-unicode-width     = "0.1"
+crossbeam     = "0.8"
+ctrlc         = "3"
+directories   = "6.0.0"
+filetime      = "0.2"
+getch         = "0.3"
+glob          = "0.3"
+ignore        = "0.4"
+lazy_static   = "1"
+memmap        = "0.7"
+num_cpus      = "1"
+regex         = "1"
+rand          = "0.9"
+rlibc         = "1"
+serde         = {version = "1.0", features = ["derive"]}
+structopt     = "0.3"
+tempfile      = "3"
+term          = "1.0"
+time          = "0.3"
+toml          = "0.8"
+unicode-width = "0.2"
 
 [target.'cfg(not(target_os = "windows"))'.dependencies]
 termios           = "0.3"
@@ -66,7 +64,7 @@ codegen-units    = 1
 opt-level        = 3
 debug            = false
 rpath            = false
-lto              = false
+lto              = true
 debug-assertions = false
 codegen-units    = 1
 
@@ -79,8 +77,7 @@ debug-assertions = false
 codegen-units    = 1
 
 [package.metadata.release]
-dev-version-ext            = "pre"
-pre-release-commit-message = "Prepare to v{{version}}"
-pro-release-commit-message = "Start next development iteration v{{version}}"
-tag-message                = "Bump version to {{version}}"
-tag-prefix                 = ""
+pre-release-commit-message  = "Prepare to v{{version}}"
+post-release-commit-message = "Start next development iteration v{{version}}"
+tag-message                 = "Bump version to {{version}}"
+tag-prefix                  = ""

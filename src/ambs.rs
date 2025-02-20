@@ -5,11 +5,10 @@ use amber::pipeline_finder::PipelineFinder;
 use amber::pipeline_matcher::PipelineMatcher;
 use amber::pipeline_printer::PipelinePrinter;
 use amber::pipeline_sorter::PipelineSorter;
-use amber::util::{as_secsf64, decode_error, exit, read_from_file};
+use amber::util::{as_secsf64, decode_error, exit, get_config, handle_escape, read_from_file};
 use crossbeam::channel::unbounded;
-use dirs;
 use lazy_static::lazy_static;
-use serde_derive::Deserialize;
+use serde::Deserialize;
 use std::cmp;
 use std::fs;
 use std::io::Read;
@@ -55,6 +54,10 @@ pub struct Opt {
     /// [Experimental] Minimum size for using mmap
     #[structopt(long = "mmap-bytes", default_value = "1048576", value_name = "BYTES")]
     pub mmap_bytes: u64,
+
+    /// Verbose message
+    #[structopt(long = "verbose")]
+    pub verbose: bool,
 
     /// Enable regular expression search
     #[structopt(short = "r", long = "regex", hidden = DEFAULT_FLAGS.regex)]
@@ -112,6 +115,10 @@ pub struct Opt {
     #[structopt(long = "parent-ignore", hidden = DEFAULT_FLAGS.parent_ignore)]
     pub parent_ignore: bool,
 
+    /// Enable to show the line by each match
+    #[structopt(long = "line-by-match", hidden = DEFAULT_FLAGS.line_by_match)]
+    pub line_by_match: bool,
+
     /// Disable regular expression search
     #[structopt(long = "no-regex", hidden = !DEFAULT_FLAGS.regex)]
     pub no_regex: bool,
@@ -168,6 +175,10 @@ pub struct Opt {
     #[structopt(long = "no-parent-ignore", hidden = !DEFAULT_FLAGS.parent_ignore)]
     pub no_parent_ignore: bool,
 
+    /// Disable to show the line by each match
+    #[structopt(long = "no-line-by-match", hidden = !DEFAULT_FLAGS.line_by_match)]
+    pub no_line_by_match: bool,
+
     /// [Experimental] Enable TBM matcher
     #[structopt(long = "tbm")]
     pub tbm: bool,
@@ -207,6 +218,8 @@ struct DefaultFlags {
     fixed_order: bool,
     #[serde(default = "flag_true")]
     parent_ignore: bool,
+    #[serde(default = "flag_false")]
+    line_by_match: bool,
 }
 
 impl DefaultFlags {
@@ -215,26 +228,20 @@ impl DefaultFlags {
     }
 
     fn load() -> DefaultFlags {
-        match dirs::home_dir() {
-            Some(mut path) => {
-                path.push(".ambs.toml");
-                if path.exists() {
-                    match fs::File::open(&path) {
-                        Ok(mut f) => {
-                            let mut s = String::new();
-                            let _ = f.read_to_string(&mut s);
-                            match toml::from_str(&s) {
-                                Ok(x) => x,
-                                Err(_) => DefaultFlags::new(),
-                            }
-                        }
+        if let Some(path) = get_config("ambs.toml") {
+            match fs::File::open(&path) {
+                Ok(mut f) => {
+                    let mut s = String::new();
+                    let _ = f.read_to_string(&mut s);
+                    match toml::from_str(&s) {
+                        Ok(x) => x,
                         Err(_) => DefaultFlags::new(),
                     }
-                } else {
-                    DefaultFlags::new()
                 }
+                Err(_) => DefaultFlags::new(),
             }
-            None => DefaultFlags::new(),
+        } else {
+            DefaultFlags::new()
         }
     }
 
@@ -272,6 +279,11 @@ impl DefaultFlags {
             !opt.no_parent_ignore
         } else {
             opt.parent_ignore
+        };
+        opt.line_by_match = if self.line_by_match {
+            !opt.no_line_by_match
+        } else {
+            opt.line_by_match
         };
         opt
     }
@@ -320,7 +332,7 @@ fn main() {
     let keyword = if opt.key_from_file {
         match read_from_file(&opt.keyword) {
             Ok(x) => {
-                if x.len() != 0 {
+                if !x.is_empty() {
                     x
                 } else {
                     console.write(
@@ -339,7 +351,7 @@ fn main() {
             }
         }
     } else {
-        opt.keyword.into_bytes()
+        handle_escape(&opt.keyword).into_bytes()
     };
 
     // ---------------------------------------------------------------------------------------------
@@ -368,18 +380,20 @@ fn main() {
     finder.follow_symlink = opt.symlink;
     finder.skip_vcs = opt.skip_vcs;
     finder.skip_gitignore = opt.skip_gitignore;
-    finder.print_skipped = opt.skipped;
+    finder.print_skipped = opt.skipped | opt.verbose;
     finder.find_parent_ignore = opt.parent_ignore;
     sorter.through = !opt.fixed_order;
     printer.is_color = opt.color;
     printer.print_file = opt.file;
     printer.print_column = opt.column;
     printer.print_row = opt.row;
+    printer.print_line_by_match = opt.line_by_match;
 
     let use_regex = opt.regex;
     let use_tbm = opt.tbm;
     let skip_binary = !opt.binary;
-    let print_skipped = opt.skipped;
+    let print_skipped = opt.skipped | opt.verbose;
+    let print_search = opt.verbose;
     let binary_check_bytes = opt.bin_check_bytes;
     let mmap_bytes = opt.mmap_bytes;
     let max_threads = opt.max_threads;
@@ -398,6 +412,7 @@ fn main() {
                 let mut matcher = PipelineMatcher::new(m, &keyword);
                 matcher.skip_binary = skip_binary;
                 matcher.print_skipped = print_skipped;
+                matcher.print_search = print_search;
                 matcher.binary_check_bytes = binary_check_bytes;
                 matcher.mmap_bytes = mmap_bytes;
                 matcher.setup(id_matcher + i, rx_in, tx_out);
@@ -408,6 +423,7 @@ fn main() {
                 let mut matcher = PipelineMatcher::new(m, &keyword);
                 matcher.skip_binary = skip_binary;
                 matcher.print_skipped = print_skipped;
+                matcher.print_search = print_search;
                 matcher.binary_check_bytes = binary_check_bytes;
                 matcher.mmap_bytes = mmap_bytes;
                 matcher.setup(id_matcher + i, rx_in, tx_out);
@@ -418,6 +434,7 @@ fn main() {
                 let mut matcher = PipelineMatcher::new(m, &keyword);
                 matcher.skip_binary = skip_binary;
                 matcher.print_skipped = print_skipped;
+                matcher.print_search = print_search;
                 matcher.binary_check_bytes = binary_check_bytes;
                 matcher.mmap_bytes = mmap_bytes;
                 matcher.setup(id_matcher + i, rx_in, tx_out);
@@ -504,12 +521,12 @@ fn main() {
     let sec_matcher_all = time_matcher_all.into_iter().map(as_secsf64).collect::<Vec<_>>();
 
     if opt.statistics {
-        console.write(ConsoleTextKind::Info, &format!("\nStatistics\n"));
+        console.write(ConsoleTextKind::Info, "\nStatistics\n");
         console.write(
             ConsoleTextKind::Info,
             &format!("  Max threads: {}\n\n", opt.max_threads),
         );
-        console.write(ConsoleTextKind::Info, &format!("  Consumed time ( busy / total )\n"));
+        console.write(ConsoleTextKind::Info, "  Consumed time ( busy / total )\n");
         console.write(
             ConsoleTextKind::Info,
             &format!("    Find     : {}s / {}s\n", sec_finder_bsy, sec_finder_all),

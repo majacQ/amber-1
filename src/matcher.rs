@@ -1,10 +1,10 @@
 use crossbeam::channel::unbounded;
 use regex::RegexBuilder;
 use rlibc::memcmp;
-use scoped_threadpool::Pool;
 use std::cmp;
 use std::collections::HashMap;
 use std::str;
+use std::thread;
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Matcher
@@ -68,6 +68,12 @@ impl BruteForceMatcher {
     }
 }
 
+impl Default for BruteForceMatcher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Matcher for BruteForceMatcher {
     fn search(&self, src: &[u8], pat: &[u8]) -> Vec<Match> {
         let src_len = src.len();
@@ -111,6 +117,12 @@ pub struct QuickSearchMatcher {
     pub size_per_thread: usize,
 }
 
+impl Default for QuickSearchMatcher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl QuickSearchMatcher {
     pub fn new() -> Self {
         QuickSearchMatcher {
@@ -136,27 +148,25 @@ impl QuickSearchMatcher {
 
             let success;
             unsafe {
-                let ret = memcmp(src_ptr.offset(i as isize), pat_ptr, pat_len);
-                success = if ret == 0 { true } else { false };
+                let ret = memcmp(src_ptr.add(i), pat_ptr, pat_len);
+                success = ret == 0;
             }
 
-            if success {
-                if MatcherUtil::check_char_boundary(src, i) {
-                    ret.push(Match {
-                        beg: i,
-                        end: i + pat_len,
-                        sub_match: Vec::new(),
-                    });
-                    i += pat_len;
-                    continue;
-                }
+            if success && MatcherUtil::check_char_boundary(src, i) {
+                ret.push(Match {
+                    beg: i,
+                    end: i + pat_len,
+                    sub_match: Vec::new(),
+                });
+                i += pat_len;
+                continue;
             }
 
             if src_len <= i + pat_len {
                 break;
             }
             unsafe {
-                let t = *src_ptr.offset((i + pat_len) as isize) as isize;
+                let t = *src_ptr.add(i + pat_len) as isize;
                 i += *qs_ptr.offset(t);
             }
         }
@@ -183,14 +193,12 @@ impl Matcher for QuickSearchMatcher {
             self.search_sub(src, pat, &qs_table, 0, src_len)
         } else {
             let (tx, rx) = unbounded();
-            let mut pool = Pool::new(thread_num as u32);
-
-            pool.scoped(|scoped| {
+            thread::scope(|s| {
                 for i in 0..thread_num {
                     let tx = tx.clone();
                     let beg = src_len * i / thread_num;
                     let end = src_len * (i + 1) / thread_num;
-                    scoped.execute(move || {
+                    s.spawn(move || {
                         let tmp = self.search_sub(src, pat, &qs_table, beg, end);
                         let _ = tx.send((i, tmp));
                     });
@@ -222,6 +230,12 @@ impl Matcher for QuickSearchMatcher {
 pub struct TbmMatcher {
     pub max_threads: usize,
     pub size_per_thread: usize,
+}
+
+impl Default for TbmMatcher {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl TbmMatcher {
@@ -264,7 +278,7 @@ impl TbmMatcher {
             }
 
             unsafe {
-                let ret = memcmp(src_ptr.offset((i + 1 - pat_len) as isize), pat_ptr, pat_len);
+                let ret = memcmp(src_ptr.add(i + 1 - pat_len), pat_ptr, pat_len);
                 if ret != 0 {
                     i += md2;
                     continue 'outer;
@@ -314,14 +328,12 @@ impl Matcher for TbmMatcher {
             self.search_sub(src, pat, &qs_table, md2, 0, src_len)
         } else {
             let (tx, rx) = unbounded();
-            let mut pool = Pool::new(thread_num as u32);
-
-            pool.scoped(|scoped| {
+            thread::scope(|s| {
                 for i in 0..thread_num {
                     let tx = tx.clone();
                     let beg = src_len * i / thread_num;
                     let end = src_len * (i + 1) / thread_num;
-                    scoped.execute(move || {
+                    s.spawn(move || {
                         let tmp = self.search_sub(src, pat, &qs_table, md2, beg, end);
                         let _ = tx.send((i, tmp));
                     });
@@ -356,6 +368,12 @@ pub struct FjsMatcher {
     pub use_sse: bool,
 }
 
+impl Default for FjsMatcher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FjsMatcher {
     pub fn new() -> Self {
         FjsMatcher {
@@ -386,7 +404,7 @@ impl FjsMatcher {
         let mut prev: isize = -(pat_len as isize);
 
         while ip < end {
-            if j <= 0 {
+            if j == 0 {
                 if ip + 1 >= src_len {
                     return ret;
                 }
@@ -402,21 +420,19 @@ impl FjsMatcher {
                     i += 1;
                     j += 1;
                 }
-                if j == mp {
-                    if MatcherUtil::check_char_boundary(src, i - mp) {
-                        if prev + pat_len as isize <= (i - mp) as isize {
-                            ret.push(Match {
-                                beg: i - mp,
-                                end: i - mp + pat_len,
-                                sub_match: Vec::new(),
-                            });
-                            prev = (i - mp) as isize;
-                        }
-                        i += 1;
-                        j += 1;
+                if j == mp && MatcherUtil::check_char_boundary(src, i - mp) {
+                    if prev + pat_len as isize <= (i - mp) as isize {
+                        ret.push(Match {
+                            beg: i - mp,
+                            end: i - mp + pat_len,
+                            sub_match: Vec::new(),
+                        });
+                        prev = (i - mp) as isize;
                     }
+                    i += 1;
+                    j += 1;
                 }
-                if j <= 0 {
+                if j == 0 {
                     i += 1;
                 } else {
                     j = betap[j] as usize;
@@ -426,17 +442,16 @@ impl FjsMatcher {
                     i += 1;
                     j += 1;
                 }
-                if j == pat_len {
-                    if MatcherUtil::check_char_boundary(src, i - pat_len) {
-                        if prev + pat_len as isize <= (i - pat_len) as isize {
-                            ret.push(Match {
-                                beg: i - pat_len,
-                                end: i,
-                                sub_match: Vec::new(),
-                            });
-                            prev = (i - pat_len) as isize;
-                        }
-                    }
+                if j == pat_len
+                    && MatcherUtil::check_char_boundary(src, i - pat_len)
+                    && prev + pat_len as isize <= (i - pat_len) as isize
+                {
+                    ret.push(Match {
+                        beg: i - pat_len,
+                        end: i,
+                        sub_match: Vec::new(),
+                    });
+                    prev = (i - pat_len) as isize;
                 }
                 j = betap[j] as usize;
             }
@@ -480,14 +495,12 @@ impl Matcher for FjsMatcher {
             self.search_sub(src, pat, &betap, &delta, 0, src_len)
         } else {
             let (tx, rx) = unbounded();
-            let mut pool = Pool::new(thread_num as u32);
-
-            pool.scoped(|scoped| {
+            thread::scope(|s| {
                 for i in 0..thread_num {
                     let tx = tx.clone();
                     let beg = src_len * i / thread_num;
                     let end = src_len * (i + 1) / thread_num;
-                    scoped.execute(move || {
+                    s.spawn(move || {
                         let tmp = self.search_sub(src, pat, &betap, &delta, beg, end);
                         let _ = tx.send((i, tmp));
                     });
@@ -521,6 +534,12 @@ pub struct RegexMatcher;
 impl RegexMatcher {
     pub fn new() -> Self {
         RegexMatcher
+    }
+}
+
+impl Default for RegexMatcher {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -589,20 +608,20 @@ impl MatcherUtil {
         let pos4 = if pos + 4 >= src_len { src_len - 1 } else { pos + 4 };
         let pos5 = if pos + 5 >= src_len { src_len - 1 } else { pos + 5 };
         match (src[pos0], src[pos1], src[pos2], src[pos3], src[pos4], src[pos5]) {
-            (0x00..=0x7f, _, _, _, _, _) => (1),                                         // ASCII
-            (0xc2..=0xdf, 0x80..=0xbf, _, _, _, _) => (2),                               // UTF-8
-            (0xe0..=0xef, 0x80..=0xbf, 0x80..=0xbf, _, _, _) => (3),                     // UTF-8
-            (0xf0..=0xf7, 0x80..=0xbf, 0x80..=0xbf, 0x80..=0xbf, _, _) => (4),           // UTF-8
-            (0xf8..=0xfb, 0x80..=0xbf, 0x80..=0xbf, 0x80..=0xbf, 0x80..=0xbf, _) => (5), // UTF-8
-            (0xfc..=0xfd, 0x80..=0xbf, 0x80..=0xbf, 0x80..=0xbf, 0x80..=0xbf, 0x80..=0xbf) => (6), // UTF-8
-            (0x8e, 0xa1..=0xdf, _, _, _, _) => (2),                                      // EUC-JP
-            (0xa1..=0xfe, 0xa1..=0xfe, _, _, _, _) => (2),                               // EUC-JP
-            (0xa1..=0xdf, _, _, _, _, _) => (1),                                         // ShiftJIS
-            (0x81..=0x9f, 0x40..=0x7e, _, _, _, _) => (2),                               // ShiftJIS
-            (0x81..=0x9f, 0x80..=0xfc, _, _, _, _) => (2),                               // ShiftJIS
-            (0xe0..=0xef, 0x40..=0x7e, _, _, _, _) => (2),                               // ShiftJIS
-            (0xe0..=0xef, 0x80..=0xfc, _, _, _, _) => (2),                               // ShiftJIS
-            _ => (1),                                                                    // Unknown
+            (0x00..=0x7f, _, _, _, _, _) => 1,                                         // ASCII
+            (0xc2..=0xdf, 0x80..=0xbf, _, _, _, _) => 2,                               // UTF-8
+            (0xe0..=0xef, 0x80..=0xbf, 0x80..=0xbf, _, _, _) => 3,                     // UTF-8
+            (0xf0..=0xf7, 0x80..=0xbf, 0x80..=0xbf, 0x80..=0xbf, _, _) => 4,           // UTF-8
+            (0xf8..=0xfb, 0x80..=0xbf, 0x80..=0xbf, 0x80..=0xbf, 0x80..=0xbf, _) => 5, // UTF-8
+            (0xfc..=0xfd, 0x80..=0xbf, 0x80..=0xbf, 0x80..=0xbf, 0x80..=0xbf, 0x80..=0xbf) => 6, // UTF-8
+            (0x8e, 0xa1..=0xdf, _, _, _, _) => 2,                                      // EUC-JP
+            (0xa1..=0xfe, 0xa1..=0xfe, _, _, _, _) => 2,                               // EUC-JP
+            (0xa1..=0xdf, _, _, _, _, _) => 1,                                         // ShiftJIS
+            (0x81..=0x9f, 0x40..=0x7e, _, _, _, _) => 2,                               // ShiftJIS
+            (0x81..=0x9f, 0x80..=0xfc, _, _, _, _) => 2,                               // ShiftJIS
+            (0xe0..=0xef, 0x40..=0x7e, _, _, _, _) => 2,                               // ShiftJIS
+            (0xe0..=0xef, 0x80..=0xfc, _, _, _, _) => 2,                               // ShiftJIS
+            _ => 1,                                                                    // Unknown
         }
     }
 }
@@ -675,25 +694,9 @@ mod tests {
         test_matcher(&matcher);
     }
 
-    #[cfg(feature = "sse")]
-    #[test]
-    fn test_quick_search_matcher_sse() {
-        let mut matcher = QuickSearchMatcher::new();
-        matcher.use_sse = true;
-        test_matcher(&matcher);
-    }
-
     #[test]
     fn test_tbm_matcher() {
         let matcher = TbmMatcher::new();
-        test_matcher(&matcher);
-    }
-
-    #[cfg(feature = "sse")]
-    #[test]
-    fn test_tbm_matcher_sse() {
-        let mut matcher = TbmMatcher::new();
-        matcher.use_sse = true;
         test_matcher(&matcher);
     }
 

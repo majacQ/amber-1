@@ -1,8 +1,8 @@
-use crate::ignore::{Ignore, IgnoreGit, IgnoreVcs};
+use crate::ignore::{Gitignore, Ignore, IgnoreVcs};
 use crate::pipeline::{PipelineFork, PipelineInfo};
 use crossbeam::channel::{Receiver, Sender};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -34,7 +34,13 @@ pub struct PipelineFinder {
     seq_no: usize,
     current_tx: usize,
     ignore_vcs: IgnoreVcs,
-    ignore_git: Vec<IgnoreGit>,
+    ignore_git: Vec<Gitignore>,
+}
+
+impl Default for PipelineFinder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl PipelineFinder {
@@ -72,7 +78,7 @@ impl PipelineFinder {
 
         if attr.is_file() {
             if attr.len() != 0 {
-                self.send_path(base, &tx);
+                self.send_path(base, tx);
             }
         } else {
             let reader = match fs::read_dir(&base) {
@@ -96,12 +102,12 @@ impl PipelineFinder {
                             }
                         };
                         if file_type.is_file() {
-                            self.send_path(entry.path(), &tx);
+                            self.send_path(entry.path(), tx);
                         } else {
                             let find_dir = file_type.is_dir() & self.is_recursive;
                             let find_symlink = file_type.is_symlink() & self.is_recursive & self.follow_symlink;
                             if (find_dir | find_symlink) & self.check_path(&entry.path(), true) {
-                                self.find_path(entry.path(), &tx, find_symlink);
+                                self.find_path(entry.path(), tx, find_symlink);
                             }
                         }
                     }
@@ -113,9 +119,9 @@ impl PipelineFinder {
         }
     }
 
-    fn send_path(&mut self, path: PathBuf, tx: &Vec<Sender<PipelineInfo<PathInfo>>>) {
+    fn send_path(&mut self, path: PathBuf, tx: &[Sender<PipelineInfo<PathInfo>>]) {
         if self.check_path(&path, false) {
-            let _ = tx[self.current_tx].send(PipelineInfo::SeqDat(self.seq_no, PathInfo { path: path }));
+            let _ = tx[self.current_tx].send(PipelineInfo::SeqDat(self.seq_no, PathInfo { path }));
             self.seq_no += 1;
             self.current_tx = if self.current_tx == tx.len() - 1 {
                 0
@@ -130,12 +136,12 @@ impl PipelineFinder {
             return false;
         }
 
-        if let Ok(reader) = fs::read_dir(&path) {
+        if let Ok(reader) = fs::read_dir(path) {
             for i in reader {
                 match i {
                     Ok(entry) => {
                         if entry.path().ends_with(".gitignore") {
-                            self.ignore_git.push(IgnoreGit::new(&entry.path()));
+                            self.ignore_git.push(Gitignore::new(entry.path()).0);
                             return true;
                         }
                     }
@@ -154,46 +160,46 @@ impl PipelineFinder {
 
     fn check_path(&mut self, path: &PathBuf, is_dir: bool) -> bool {
         let ok_vcs = if self.skip_vcs {
-            !self.ignore_vcs.is_ignore(&path, is_dir)
+            !self.ignore_vcs.is_ignore(path, is_dir)
         } else {
             true
         };
 
         let ok_git = if self.skip_gitignore && !self.ignore_git.is_empty() {
-            !self.ignore_git.last().unwrap().is_ignore(&path, is_dir)
+            !self.ignore_git.last().unwrap().is_ignore(path, is_dir)
         } else {
             true
         };
 
         if !ok_vcs & self.print_skipped {
-            self.infos.push(format!("Skipped: {:?} ( vcs file )\n", path));
+            self.infos.push(format!("Skip (vcs file)  : {:?}", path));
         }
 
         if !ok_git & self.print_skipped {
-            self.infos.push(format!("Skipped: {:?} ( .gitignore )\n", path));
+            self.infos.push(format!("Skip (.gitignore): {:?}", path));
         }
 
         ok_vcs && ok_git
     }
 
-    fn set_default_gitignore(&mut self, base: &PathBuf) -> PathBuf {
+    fn set_default_gitignore(&mut self, base: &Path) -> PathBuf {
         if !self.skip_gitignore {
-            return base.clone();
+            return base.to_path_buf();
         }
         if !self.find_parent_ignore {
-            return base.clone();
+            return base.to_path_buf();
         }
 
         let base_abs = match base.canonicalize() {
             Ok(x) => x,
             Err(e) => {
                 self.errors.push(format!("Error: {} @ {}", e, base.to_str().unwrap()));
-                return base.clone();
+                return base.to_path_buf();
             }
         };
 
         let mut parent_abs = base_abs.parent();
-        let mut parent = base.clone();
+        let mut parent = base.to_path_buf();
         if parent.is_dir() {
             parent.push("..");
         } else {
@@ -203,13 +209,13 @@ impl PipelineFinder {
             if self.push_gitignore(&PathBuf::from(&parent)) {
                 self.infos
                     .push(format!("Found .gitignore at the parent directory: {:?}\n", parent));
-                return base.clone();
+                return base.to_path_buf();
             }
             parent_abs = parent_abs.unwrap().parent();
             parent.push("..");
         }
 
-        return base.clone();
+        base.to_path_buf()
     }
 }
 
@@ -258,6 +264,9 @@ impl PipelineFork<PathBuf, PathInfo> for PipelineFinder {
                     break;
                 }
 
+                Ok(PipelineInfo::MsgDebug(i, e)) => {
+                    let _ = tx[0].send(PipelineInfo::MsgDebug(i, e));
+                }
                 Ok(PipelineInfo::MsgInfo(i, e)) => {
                     let _ = tx[0].send(PipelineInfo::MsgInfo(i, e));
                 }
